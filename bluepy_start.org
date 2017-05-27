@@ -1,0 +1,144 @@
+* Imports
+
+#+BEGIN_SRC ipython :session bluepy :results none
+import binascii
+from bluepy.btle import (
+    Scanner,
+    DefaultDelegate,
+    Peripheral,
+    )
+#+END_SRC
+
+/note:/ The pip installer will install an ARM executable (`bluepy-helper`) - apparently this is meant for raspberry pis. To run it on a desktop get the source from git and compile it.
+
+#+BEGIN_EXAMPLE
+sudo apt-get install git build-essential libglib2.0-dev
+git clone https://github.com/IanHarvey/bluepy.git
+cd bluepy
+python setup.py build
+python setup.py install
+#+END_EXAMPLE
+
+* Scanning
+
+The `Scanner` is used to scan for BLE devices broadcasting advertising data. The `DefaultDelegate` receives callbacks when broadcasts from devices are received.
+
+/note:/ The `bluepy-helper` needs to be root in order to scan. To get around this you neded to give it extra permissions.
+
+#+BEGIN_EXAMPLE
+sudo apt-get install libcap2-bin
+cd <path to virtualenv>/lib/python2.7/site-packages/bluepy
+sudo setcap 'cap_net_raw,cap_net_adm+eip' bluepy-helper
+#+END_EXAMPLE
+
+I was going to say that you could set it before installing ``bluepy``, but the ``python setup.py install`` command both builds and installs the file, so you need to find it in the virtual environment installation (or wherever you installed it).
+
+
+** The Scan Delegate
+
+This is a class that handles callbacks that are called by the Scanner when an event occurs.
+
+#+BEGIN_SRC ipython :session bluepy :results none
+class ScanDelegate(DefaultDelegate):
+    def handleDiscover(self, dev, isNewDev, isNewData):
+        if isNewDev:
+            print "Discovered device: {0}".format(dev.addr)
+        elif isNewData:
+            print "Received New Data from {0}".format(dev.addr)
+        return
+#+END_SRC
+
+** Scanning
+Now the scanner is created with the ``ScanDelegate``. The ``scan`` method's argument is the number of seconds it should scan.
+
+#+BEGIN_SRC ipython :session bluepy :results none
+scanner = Scanner().withDelegate(ScanDelegate())
+devices = scanner.scan(5.0)
+#+END_SRC
+
+This will output the information gotten by scanning.
+
+#+BEGIN_SRC ipython :session bluepy :results output
+for device in devices[:2]:
+    print("\nDevice: {0}, {1}, RSSI={2} db".format(device.addr,
+                                                   device.addrType,
+                                                   device.rssi))
+    print(" raw data: {0}".format(binascii.hexlify(device.rawData)))
+    for (adtype, description, value) in device.getScanData():
+        print " {0} = {1}".format(description, value)
+    # if device.connectable:
+    #     break
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+
+Device: 96:57:a5:09:a4:50, public, RSSI=-61 db
+ raw data: 02010606ff650001c905020a06030378fe1709454e56592050686f746f203738303020736572696573
+ Flags = 06
+ Tx Power = 06
+ Complete 16b Services = 78fe
+ Complete Local Name = ENVY Photo 7800 series
+ Manufacturer = 650001c905
+
+Device: 02:9c:02:14:56:23, public, RSSI=-77 db
+ raw data: 02011e06ff6500010005020a06030378fe1109454e5659203530303020736572696573
+ Flags = 1e
+ Tx Power = 06
+ Complete 16b Services = 78fe
+ Complete Local Name = ENVY 5000 series
+ Manufacturer = 6500010005
+#+end_example
+
+02
+01 1e : Flags 1e
+06 ff : manufacturer 6500010005
+02
+0a 06 : TX Power 06
+03
+
+03 78fe: complete 16 bit services
+11
+
+09 454e5659203530303020736572696573 : complete local name
+
+The 'raw data' represents the Advertising Protocol Data Unit (PDU.)
+
+The left-hand side labels (e.g. "Flags") are determined by the EIR data type. Looking at the second through fourth octets on the first raw-data set you see '0106'. 
+
+0x01 is the "Flags" data-type and 06 is the value that was given. The flags tells you about the advertising state of the the device and which of two transports (BLE, or Bluetooth BR/EDR) it supports.
+
+After the Flags is 06 - "incomplete list of 128-bit service class UUID".
+
+#+BEGIN_SRC ipython :session bluepy :results output
+class NotificationDelegate(DefaultDelegate):
+    def handleNotification(self, cHandle, data):
+        print("Notified: {0}".format(data))
+#+END_SRC
+
+#+RESULTS:
+
+#+BEGIN_SRC ipython :session bluepy :results output
+address = "a0:e6:f8:4b:91:84"
+
+device = Peripheral(address)
+device.setDelegate(NotificationDelegate())
+for trial in range(10):
+    if device.waitForNotifications(1):
+        continue
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+timed out
+timed out
+timed out
+timed out
+timed out
+timed out
+timed out
+timed out
+timed out
+timed out
+#+end_example
+
