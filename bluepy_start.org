@@ -73,72 +73,118 @@ for device in devices[:2]:
 #+RESULTS:
 #+begin_example
 
-Device: 96:57:a5:09:a4:50, public, RSSI=-61 db
- raw data: 02010606ff650001c905020a06030378fe1709454e56592050686f746f203738303020736572696573
+Device: 00:04:ea:05:0a:14, public, RSSI=-68 db
+ raw data: 020106020a04110701431ac9da5261ad764e3094ab1fca3306ff650001c90412084850204f66666963654a65742032353020
+ Short Local Name = HP OfficeJet 250 
  Flags = 06
- Tx Power = 06
- Complete 16b Services = 78fe
- Complete Local Name = ENVY Photo 7800 series
- Manufacturer = 650001c905
+ Tx Power = 04
+ Manufacturer = 650001c904
+ Complete 128b Services = 01431ac9da5261ad764e3094ab1fca33
 
-Device: 02:9c:02:14:56:23, public, RSSI=-77 db
- raw data: 02011e06ff6500010005020a06030378fe1109454e5659203530303020736572696573
- Flags = 1e
- Tx Power = 06
- Complete 16b Services = 78fe
- Complete Local Name = ENVY 5000 series
- Manufacturer = 6500010005
+Device: 5b:34:ed:de:ed:c6, random, RSSI=-75 db
+ raw data: 02011a17ff4c000c0e00cf45fea85227146986af8707c910020b00
+ Flags = 1a
+ Manufacturer = 4c000c0e00cf45fea85227146986af8707c910020b00
 #+end_example
 
-02
-01 1e : Flags 1e
-06 ff : manufacturer 6500010005
-02
-0a 06 : TX Power 06
-03
+This is the raw-data for the first device broken into bytes:
 
-03 78fe: complete 16 bit services
-11
+02-01-06-02-0a-04-11-07-01-43-1a-c9-da-52-61-ad-76-4e-30-94-ab-1f-ca-33-06-ff-65-00-01-c9-04-12-08-48-50-20-4f-66-66-69-63-65-4a-65-74-20-32-35-30-20
 
-09 454e5659203530303020736572696573 : complete local name
+[[https://docs.mbed.com/docs/ble-intros/en/latest/Advanced/CustomGAP/][The GAP structure]] (see [[https://www.bluetooth.com/specifications/assigned-numbers/generic-access-profile][here]] for the data types).
 
-The 'raw data' represents the Advertising Protocol Data Unit (PDU.)
+02 Length of  field (bytes)
+01 : type  (Flags)
+06: 06
 
-The left-hand side labels (e.g. "Flags") are determined by the EIR data type. Looking at the second through fourth octets on the first raw-data set you see '0106'. 
+Here's what it says in the spec [[http://www.bluetooth.org/docman/handlers/downloaddoc.ashx?doc_id=245130][direct download for pdf]]:
 
-0x01 is the "Flags" data-type and 06 is the value that was given. The flags tells you about the advertising state of the the device and which of two transports (BLE, or Bluetooth BR/EDR) it supports.
+1.3 FLAGS
+1.3.1 Description
+The Flags data type contains one bit Boolean flags. The Flags data type shall
+be included when any of the Flag bits are non-zero, otherwise the Flags data
+type may be omitted. All octets that are 0x00 are not transmitted as long as all
+other octets after that octet are also 0x00.
 
-After the Flags is 06 - "incomplete list of 128-bit service class UUID".
+| Octet | Bit | Description                                             |
+|-------+-----+---------------------------------------------------------|
+|     0 |   0 | LE Limited Discoverable mode                            |
+|     0 |   1 | LE General Discoverable mode                            |
+|     0 |   2 | BR/EDR not supported                                    |
+|     0 |   3 | Simultaneous LE and BR/EDR to same controller supported |
+|     0 |   4 | Simultaneous LE and BR/EDR to same host supported       |
+|     0 | 5-7 | Reserved                                                |
 
-#+BEGIN_SRC ipython :session bluepy :results output
-class NotificationDelegate(DefaultDelegate):
-    def handleNotification(self, cHandle, data):
-        print("Notified: {0}".format(data))
+So, since /06/ translates to /0110/ in bits, you get:
+
+ - LE General Discoverable Mode
+ - BR/EDR not supported (LE only)
+
+02: Length of field is two bytes
+0a: type is tx power
+04: the tx power is 04
+
+According to the spec, you can use this and the rssi to calculate path loss:
+
+  pathloss = Tx Power Level - RSSI
+
+The lower the pathloss, the closer you should be, maybe. So in this case
+
+  pathloss = 4 - (-68)
+           = 72
+
+11 : next field is 17 bytes (11 is 00010001 in bits)
+07: type is complete list of 128-bit service class uuids
+01431ac9da5261ad764e3094ab1fca33: one uuid
+
+The uuid's are stored with the least significant bit first, so it should actually be read:
+
+#+BEGIN_SRC ipython :session bluepy
+import array
+source = "01431ac9da5261ad764e3094ab1fca33"
+hexed = binascii.unhexlify(source)
+byte_array = array.array("h", hexed)
+byte_array.byteswap()
+byte_array.reverse()
+uuid_msb = binascii.hexlify(byte_array)
+uuid_msb
 #+END_SRC
 
 #+RESULTS:
+: 33ca1fab94304e76ad6152dac91a4301
 
-#+BEGIN_SRC ipython :session bluepy :results output
-address = "a0:e6:f8:4b:91:84"
+By convention the bytes are broken up with hypens in a 4-2-2-2-6 pattern:
 
-device = Peripheral(address)
-device.setDelegate(NotificationDelegate())
-for trial in range(10):
-    if device.waitForNotifications(1):
-        continue
+#+BEGIN_SRC ipython :session bluepy
+from bluepy.btle import UUID
+str(UUID(uuid_msb))
 #+END_SRC
 
 #+RESULTS:
-#+begin_example
-timed out
-timed out
-timed out
-timed out
-timed out
-timed out
-timed out
-timed out
-timed out
-timed out
-#+end_example
+: 33ca1fab-9430-4e76-ad61-52dac91a4301
 
+The bluepy version works the same as the python version in this case, but for the short-forms (16-bit, 32-bit) it adds the suffixes for you to make them 128 bits again.
+
+06: The next structure is six bytes
+ff: Manufacturer Specific Data
+65-00: company identifier code
+01-c9-04: manufacturer data
+
+There is [[https://www.bluetooth.com/specifications/assigned-numbers/company-identifiers][a list]] of company identifier codes that shows that the Hewlett-Packard code is 0x0065, so once again the data is LSB. I don't know that there's an order to the extra data.
+
+12: next structure is 18 bytes (00010010)
+08: Shortened local name
+48-50-20-4f-66-66-69-63-65-4a-65-74-20-32-35-30-20:
+
+#+BEGIN_SRC ipython :session bluepy
+name = "48-50-20-4f-66-66-69-63-65-4a-65-74-20-32-35-30-20"
+name = name.replace("-", '')
+name.decode("hex")
+#+END_SRC
+
+#+RESULTS:
+: HP OfficeJet 250
+
+So the last thing in the data was the model of the printer.
+
+So the only thing we could add to this would be the Manufacturer and formatting the uuid better.
